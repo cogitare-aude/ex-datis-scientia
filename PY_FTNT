@@ -1,0 +1,198 @@
+# -*- coding: utf-8 -*-
+"""
+Spyder Editor
+
+Written to analyze and predict FTNT
+Methodology: 
+1.	Famma & French regression
+2.	Blume & Stambaugh size effect
+
+"""
+
+import datetime
+import pandas.io.data as web
+import pandas as pd
+import numpy as np
+import scipy as sp
+from scipy import *
+from scipy.stats.stats import *  
+import math
+import matplotlib.pyplot as plt
+from pandas import Series, DataFrame
+pd.__version__
+
+#TO set frequency (for comparison period) CHANGE X
+#x='W-FRI' OR 'M' OR 'D'
+x='W'
+
+if x=='W-FRI':
+    y='Rf_weekly.csv'
+    z='WTB4WK'
+elif x=='M':
+    y='Rf_Monthly.csv'
+    z='TB4WK'
+else:    
+    y='Rf_daily.csv'
+    z='DTB4WK'
+
+#Download data (ETF RF data only start at 2012); IPO in 2009
+directory='C:\\Users\\Ryan\\OneDrive\\Documents\\A_BComm\\Research\\FTNT'
+path=directory
+start = datetime.datetime(2010, 1, 1)
+end = datetime.datetime(2016, 4, 22)
+
+tickers_ftnt='FTNT'
+tickers_nq='NAQ.F'
+tickers_rf='GOVT'
+
+d_f= pd.io.data.get_data_yahoo(tickers_ftnt, start, end)['Adj Close'] 
+d_n=pd.io.data.get_data_yahoo(tickers_nq, start, end)['Adj Close'] 
+#d_rf=pd.io.data.get_data_yahoo(tickers_rf, start, end)['Adj Close'] 
+
+#Read 4-week Risk Free USA AND turn into %
+d_rf=pd.read_csv(path+'\\'+y)
+d_rf=d_rf.set_index(['DATE'])
+#d_rf=d_rf.set_index(pd.DatetimeIndex(d_rf['Date']))
+d_rf=d_rf/100   
+#d_rf=pd.DataFrame(d_rf).rename(columns={'DTB4WK':'RF'})
+ret_rf=d_rf
+
+#change data to net returns
+ret_f = d_f.pct_change()
+ret_n = d_n.pct_change()
+#ret_rf= d_rf.pct_change()
+
+#change to gross->log returns
+lret_f =np.log(1+ret_f)
+lret_n = np.log(1+ret_n)
+lret_rf=np.log(1+ret_rf)
+
+#sum daily log into monthly log returns AND drop all Nan (only applies to frq(or x)=Daily)
+w_ret_f=lret_f.resample(x,how='sum').dropna()
+w_ret_n=lret_n.resample(x,how='sum').dropna()
+w_ret_rf=lret_rf.dropna()
+#w_ret_rf=lret_rf.resample(x,how='sum')
+
+#Turn to dataframe and rename to unique columns
+df_f = pd.DataFrame(w_ret_f).rename(columns={'Adj Close':'FTNT'})
+df_n= pd.DataFrame(w_ret_n).rename(columns={'Adj Close':'NQ'})
+df_rf=pd.DataFrame(w_ret_rf).rename(columns={z:'RF'})
+#df_rf=pd.DataFrame(w_ret_rf).rename(columns={'Adj Close':'RF'})
+
+#Excess Calc (Incld. Rm-Rf b/c partly explained by +/- of market, FamaFrench)
+df_merge=df_n.join(df_rf)
+df_merge['ExN']=df_merge['NQ']-df_merge['RF']
+df_rf=df_merge['RF']
+df_merge=pd.DataFrame(df_merge[['ExN','NQ']])
+
+#t-1 T-n FTNT Data & Market Index  (ALL CALC END ABOVE)
+df_f_1=pd.DataFrame(df_f).shift(periods=1, freq=None, axis=0).rename(columns={'FTNT':'FTNT-1'})
+df_f_2=pd.DataFrame(df_f).shift(periods=2, freq=None, axis=0).rename(columns={'FTNT':'FTNT-2'})
+df_f_3=pd.DataFrame(df_f).shift(periods=3, freq=None, axis=0).rename(columns={'FTNT':'FTNT-3'})
+
+df_merge_1=pd.DataFrame(df_merge).shift(periods=1, freq=None, axis=0).rename(columns={'ExN':'ExN-1','NQ':'NQ-1'})
+df_merge_2=pd.DataFrame(df_merge).shift(periods=2, freq=None, axis=0).rename(columns={'ExN':'ExN-2','NQ':'NQ-2'})
+df_merge_3=pd.DataFrame(df_merge).shift(periods=3, freq=None, axis=0).rename(columns={'ExN':'ExN-3','NQ':'NQ-3'})
+
+#Merge (Only Data start at 2012-3-26, [4:]); the [],1] in drop signals vertical
+df_mergeall=pd.concat([df_rf, df_f, df_merge, df_f_3, df_f_2, df_f_1, df_merge_3, df_merge_2, df_merge_1],axis=1,join_axes=[df_f.index]).ix[3:].dropna()
+df_f=df_mergeall['FTNT']
+#df_f=pd.DataFrame(df_f)
+df_mergeall=df_mergeall.drop(['FTNT'],1)
+#df_mergeall=pd.DataFrame(df_mergeall)
+
+#Regression all
+result=pd.ols(y=df_f, x=df_mergeall)
+coeffs = pd.DataFrame(result.beta).rename(columns={0:'coeffs'})
+tstats = pd.DataFrame(result.t_stat).rename(columns={0:'tstat'})
+output = coeffs.join(tstats)
+
+#Moment of FTNT (1=mean, 2-var, 3=skw)
+norm=sp.stats.normaltest(df_f,axis=0)
+m1=sp.stats.moment(df_f,1,axis=0)
+m2=sp.stats.moment(df_f,2,axis=0)
+m3=sp.stats.moment(df_f,3,axis=0)
+
+#1st,2nd,3rd Order Autocorr(p); PERIOD defined by Beginning
+
+#Pearson correlation (assume Normal dstr.) coef (r): Use 1st value if w/o [0] syntax
+#Large strength if .5 to 1.0 -0.5 to -1.0 
+df_f_11=pd.DataFrame(df_f).shift(periods=-1, freq=None, axis=0).rename(columns={'FTNT':'FTNT+1'})
+df_f_22=pd.DataFrame(df_f).shift(periods=-2, freq=None, axis=0).rename(columns={'FTNT':'FTNT+2'})
+df_f_33=pd.DataFrame(df_f).shift(periods=-3, freq=None, axis=0).rename(columns={'FTNT':'FTNT+3'})
+df_f_44=pd.DataFrame(df_f).shift(periods=-4, freq=None, axis=0).rename(columns={'FTNT':'FTNT+4'})
+df_f_temp=pd.concat([df_f,df_f_11,df_f_22,df_f_33,df_f_44],axis=1,join_axes=[df_f.index])
+#droped NaN
+df_f_tempNa=pd.concat([df_f,df_f_11,df_f_22,df_f_33,df_f_44],axis=1,join_axes=[df_f.index]).dropna()
+df_f_tempNa_II=df_f_tempNa.drop(['FTNT'],1)
+#replace NaN to 0 & convert to List
+a=df_f_temp['FTNT'].tolist()
+a=[0 if math.isnan(x) else x for x in a]
+b=df_f_11['FTNT+1'].tolist()
+b=[0 if math.isnan(x) else x for x in b]
+c=df_f_temp['FTNT+2'].tolist()
+c=[0 if math.isnan(x) else x for x in c]
+d=df_f_temp['FTNT+3'].tolist()
+d=[0 if math.isnan(x) else x for x in d]
+e=df_f_temp['FTNT+4'].tolist()
+e=[0 if math.isnan(x) else x for x in e]
+r1=sp.stats.pearsonr(a,b)[0]
+r2=sp.stats.pearsonr(a,c)[0]
+r3=sp.stats.pearsonr(a,d)[0]
+r4=sp.stats.pearsonr(a,e)[0]
+
+#Variance of Rt+T
+m22=sp.stats.moment(df_f_temp['FTNT+1'].dropna(),2,axis=0)
+m23=sp.stats.moment(df_f_temp['FTNT+2'].dropna(),2,axis=0)
+m24=sp.stats.moment(df_f_temp['FTNT+3'].dropna(),2,axis=0)
+#Covar use 1st row 2nd value: Cov(rt,rt+k )/Var (rt )
+#Result w/o [0][1] syntax= ov(a,a)  cov(a,b) /cov(a,b)  cov(b,b)
+cov1=np.cov(a,b)[0][1]
+cov2=np.cov(a,c)[0][1]
+cov22=np.cov(b,c)[0][1]
+cov3=np.cov(a,d)[0][1]
+cov33=np.cov(b,d)[0][1]
+cov333=np.cov(c,d)[0][1]
+cov4=np.cov(a,e)[0][1]
+p1=cov1/m2
+p2=(np.cov(a,c)[0][1])/m2
+p3=(np.cov(a,d)[0][1])/m2
+p4=(np.cov(a,e)[0][1])/m2
+#Var (Rt +Rt+1)=2Var (Rt )(1+p); 2-period variance is higher than 2x 1-period variance when 1st-order autocorrelation is positive (holding longer is more risky)
+#Variance Ratios; compares long- and short-horizon return volatilities
+#vr=Var (Rt->t+T )/(T*Var(Rt->t+1 ))
+v1=m2
+v2=m2+m22+(2*cov1)
+v3=m2+m22+m23+2*cov1+2*cov2+2*cov22
+v4=m2+m22+m23+m24+2*cov1+2*cov2+2*cov22+2*cov33+2*cov333
+vrT1=v1/(1*(m2))
+vrT2=v2/(2*(m2))
+vrT3=v3/(3*(m2))
+vrT4=v4/(3*(m2))
+
+#Predict: Rt+1 = (1-p)m1 +p*Rt +Et+1 
+t_loop = 0
+for x in ['FTNT+1', 'FTNT+2', 'FTNT+3']:
+    pre=pd.ols(y=df_f_tempNa_II[x], x=df_f_tempNa['FTNT'])
+    coef = pd.DataFrame(pre.beta).rename(columns={0: x+'_'+'coef'})
+    pvalue = pd.DataFrame(pre.p_value).rename(columns={0: x+'_'+'pvalue'})
+    output = coef.join(pvalue)
+    if t_loop == 0:
+        op = output
+    else:
+        op = op.join(output)
+    t_loop += 1
+
+#Input the current return
+#rt=0.09
+#rt1=(1-p1)*m1+p1*rt+e
+
+
+#Export
+#df_f_temp.to_csv(path+'//'+'beta.csv')
+
+
+#Other Functions
+#where_are_NaNs = isnan(df_f_temp)
+#df_f_temp[where_are_NaNs] = 0
+#df_f_temp=df_f_temp.reset_index()
